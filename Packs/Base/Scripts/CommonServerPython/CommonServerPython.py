@@ -16,6 +16,8 @@ import time
 import xml.etree.cElementTree as ET
 from collections import OrderedDict
 from datetime import datetime, timedelta
+from requests.adapters import HTTPAdapter
+from urllib3.util import Retry
 from abc import abstractmethod
 
 import demistomock as demisto
@@ -3275,7 +3277,21 @@ if 'requests' in sys.modules:
             if not proxy:
                 self._session.trust_env = False
 
-        def _http_request(self, method, url_suffix, full_url=None, headers=None,
+        def implement_retry(self, retries=0, status_list_to_retry=None):
+            retry = Retry(
+                total=retries,
+                read=retries,
+                connect=retries,
+                backoff_factor=10,
+                status=retries,
+                status_forcelist=status_list_to_retry,
+                method_whitelist=frozenset(['GET', 'POST', 'PUT'])
+            )
+            adapter = HTTPAdapter(max_retries=retry)
+            self._session.mount('http://', adapter)
+            self._session.mount('https://', adapter)
+
+        def _http_request(self, method, url_suffix, full_url=None, headers=None, retries=0, status_list_to_retry=None,
                           auth=None, json_data=None, params=None, data=None, files=None,
                           timeout=10, resp_type='json', ok_codes=None, return_empty_response = False, **kwargs):
             """A wrapper for requests lib to send our requests and handle requests and responses better.
@@ -3294,6 +3310,14 @@ if 'requests' in sys.modules:
 
             :type headers: ``dict``
             :param headers: Headers to send in the request. If None, will use self._headers.
+
+            :type retries: ``int``
+            :param retries: How many retries should be made in case of a failure. when set to '0'- will fail on the first time
+
+            :type status_list_to_retry: ``iterable``
+            :param status_list_to_retry: A set of integer HTTP status codes that we should force a retry on.
+                A retry is initiated if the request method is in ['GET', 'POST', 'PUT']
+                and the response status code is in ``status_list_to_retry``.
 
             :type auth: ``tuple``
             :param auth:
@@ -3337,6 +3361,7 @@ if 'requests' in sys.modules:
                 address = full_url if full_url else urljoin(self._base_url, url_suffix)
                 headers = headers if headers else self._headers
                 auth = auth if auth else self._auth
+                self.implement_retry(retries, status_list_to_retry)
                 # Execute
                 res = self._session.request(
                     method,
